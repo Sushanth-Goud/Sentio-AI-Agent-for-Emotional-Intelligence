@@ -31,6 +31,7 @@ async function fetchApi<T>(
 
     return { data };
   } catch (error) {
+    console.error('API Error:', error);
     return { error: 'Network error. Please try again.' };
   }
 }

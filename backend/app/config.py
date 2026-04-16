@@ -12,7 +12,7 @@ class Config:
     # PostgreSQL Database (using psycopg3)
     SQLALCHEMY_DATABASE_URI = os.getenv(
         'DATABASE_URL',
-        'postgresql+psycopg://postgres:postgres@localhost:5432/ai_demo_db'
+        'sqlite:///app.db'
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {

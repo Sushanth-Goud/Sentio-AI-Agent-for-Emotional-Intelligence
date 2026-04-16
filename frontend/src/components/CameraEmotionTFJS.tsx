@@ -97,6 +97,7 @@ export function CameraEmotionTFJS({
   const [modelLoaded, setModelLoaded] = useState(false);
   const [mediapipeLoaded, setMediapipeLoaded] = useState(false);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number>(4 / 3);
+  const [isClient, setIsClient] = useState(false);
 
   // Constants
   const TARGET_FPS = 15;
@@ -438,8 +439,15 @@ export function CameraEmotionTFJS({
   );
 
   // Start camera
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
+    if (!isClient) {
+      setError("Component not ready");
+      return;
+    }
+
     console.log("[Camera] Request started");
+    console.log("[Camera] Navigator available:", typeof navigator !== "undefined");
+    console.log("[Camera] mediaDevices available:", typeof navigator?.mediaDevices !== "undefined");
     setStatus("loading");
     setError(null);
 
@@ -452,6 +460,13 @@ export function CameraEmotionTFJS({
       // Set up MediaPipe callback
       if (faceMeshRef.current) {
         faceMeshRef.current.onResults(processResults);
+      }
+
+      // Check camera support
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        const errorMsg = `Camera API not available. Navigator: ${typeof navigator}, mediaDevices: ${typeof navigator?.mediaDevices}, getUserMedia: ${typeof navigator?.mediaDevices?.getUserMedia}`;
+        console.error("[Camera]", errorMsg);
+        throw new Error("Camera not supported. Please ensure: 1) Using HTTPS or localhost, 2) Browser supports WebRTC (Chrome, Firefox, Safari, Edge)");
       }
 
       // Request camera
@@ -496,7 +511,7 @@ export function CameraEmotionTFJS({
       setError(err instanceof Error ? err.message : "Failed to start camera");
       setStatus("error");
     }
-  };
+  }, [modelLoaded, mediapipeLoaded, loadModel, loadMediaPipe, processResults, processFrame, isClient]);
 
   // Stop camera
   const stopCamera = useCallback(() => {
@@ -555,6 +570,11 @@ export function CameraEmotionTFJS({
     };
   }, [stopCamera]);
 
+  // Set isClient flag after hydration
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
   // Handle page unload
   useEffect(() => {
     const handleUnload = () => stopCamera();
@@ -592,7 +612,7 @@ export function CameraEmotionTFJS({
       </div>
 
       {/* Idle state */}
-      {status === "idle" && (
+      {isClient && status === "idle" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 p-4">
           <img
             src="/emotions/neutral.svg"

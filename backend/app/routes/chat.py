@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
 import re
 import os
-from mistralai import Mistral
+from mistralai.client import Mistral
 
 chat_bp = Blueprint('chat', __name__)
 
@@ -10,6 +10,8 @@ chat_bp = Blueprint('chat', __name__)
 api_key = os.environ.get("MISTRAL_API_KEY")
 mistral_client = Mistral(api_key=api_key) if api_key else None
 MISTRAL_MODEL = "mistral-small-latest"
+MISTRAL_AGENT_ID = os.environ.get("MISTRAL_AGENT_ID")
+MISTRAL_AGENT_VERSION = os.environ.get("MISTRAL_AGENT_VERSION", "0")
 
 # Knowledge base for Sentio
 KNOWLEDGE_BASE = {
@@ -221,6 +223,65 @@ Just ask me anything specific!"""
     return random.choice(emotion_responses) + "\n\nTry asking about: login, camera, emotions, or dashboard features."
 
 
+def _parse_agent_version(value: str | None):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def _normalize_inputs(message: str, history: list | None) -> list:
+    inputs = []
+    if history:
+        recent_history = history[-10:]
+        for msg in recent_history:
+            role = msg.get('role')
+            content = msg.get('content')
+            if role in ['user', 'assistant'] and content:
+                inputs.append({"role": role, "content": content})
+    inputs.append({"role": "user", "content": message})
+    return inputs
+
+
+def _extract_response_text(outputs) -> str:
+    message_entries = []
+    for entry in outputs or []:
+        entry_type = getattr(entry, "type", None)
+        if entry_type is None and isinstance(entry, dict):
+            entry_type = entry.get("type")
+        if entry_type != "message.output":
+            continue
+
+        content = getattr(entry, "content", None)
+        if content is None and isinstance(entry, dict):
+            content = entry.get("content")
+
+        if isinstance(content, str):
+            if content.strip():
+                message_entries.append(content)
+            continue
+
+        if isinstance(content, list):
+            parts = []
+            for chunk in content:
+                chunk_type = getattr(chunk, "type", None)
+                if chunk_type is None and isinstance(chunk, dict):
+                    chunk_type = chunk.get("type")
+                if chunk_type != "text":
+                    continue
+                chunk_text = getattr(chunk, "text", None)
+                if chunk_text is None and isinstance(chunk, dict):
+                    chunk_text = chunk.get("text")
+                if chunk_text:
+                    parts.append(chunk_text)
+            if parts:
+                message_entries.append("".join(parts))
+
+    return "\n".join(message_entries).strip()
+
+
 def get_mistral_response(message: str, emotion: str, history: list = None) -> str:
     """Get response from Mistral AI with emotion context."""
     if not mistral_client:
@@ -253,26 +314,23 @@ Example Response:
 I'm so sorry to hear that you're feeling down. I'm here for you.
 """
 
-    messages = [{"role": "system", "content": system_prompt}]
-
-    if history:
-        # Convert frontend history format to Mistral format if needed
-        # Assuming frontend sends [{role: 'user'|'assistant', content: '...'}]
-        # Filter out system messages if any, limit history length to avoid token limits
-        recent_history = history[-10:] # Keep last 10 messages context
-        for msg in recent_history:
-            if msg.get('role') in ['user', 'assistant'] and msg.get('content'):
-                messages.append({"role": msg['role'], "content": msg['content']})
-
-    # Add current message
-    messages.append({"role": "user", "content": message})
+    inputs = _normalize_inputs(message, history)
 
     try:
-        chat_response = mistral_client.chat.complete(
-            model=MISTRAL_MODEL,
-            messages=messages,
-        )
-        content = chat_response.choices[0].message.content
+        request_args = {
+            "inputs": inputs,
+            "instructions": system_prompt,
+        }
+        if MISTRAL_AGENT_ID:
+            request_args["agent_id"] = MISTRAL_AGENT_ID
+            request_args["agent_version"] = _parse_agent_version(MISTRAL_AGENT_VERSION)
+        else:
+            request_args["model"] = MISTRAL_MODEL
+
+        conversation_response = mistral_client.beta.conversations.start(**request_args)
+        content = _extract_response_text(conversation_response.outputs)
+        if not content:
+            raise Exception("Mistral response did not contain text output")
 
         # Extract emotion tag
         detected_emotion = emotion
